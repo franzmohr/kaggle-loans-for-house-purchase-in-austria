@@ -1,0 +1,133 @@
+
+# kaggle-loans-for-house-purchase-in-austria
+
+<!-- badges: start -->
+
+<!-- badges: end -->
+
+This repository documents how the data for the Kaggle competition [Loans
+to households for house purchase in
+Austria](https://www.kaggle.com/competitions/loans-to-households-for-house-purchase-in-austria)
+was generated.
+
+``` r
+library(dplyr)
+library(ecb)
+library(lubridate)
+library(readxl)
+library(tidyr)
+library(zoo)
+```
+
+## ECB data
+
+We use data from ECB’s data portal on new loans for house purchase
+issued by Austrian banks to private households.
+
+``` r
+vol <- get_data("MIR.M.AT.B.A2C.A.B.A.2250.EUR.P") %>%
+  select(obstime, obsvalue) %>%
+  rename(date = obstime, crdt = obsvalue) %>%
+  na.omit()
+
+intr <- get_data("MIR.M.AT.B.A2C.A.R.A.2250.EUR.P") %>%
+  select(obstime, obsvalue) %>%
+  rename(date = obstime, r = obsvalue) %>%
+  na.omit()
+
+result <- full_join(vol, intr, by = "date") %>%
+  arrange(date) %>%
+  mutate(date = as.Date(paste0(date, "-01")))
+```
+
+## KIM-V: Borrower-base measures
+
+The Austria Financial Market Authority introduced legally binding
+borrower-based measures to address systemic risks from the national
+residential real estate sector. The measures were legally binding
+between August 2022 and June 2025.
+
+``` r
+result <- result %>%
+  mutate(kim = as.numeric(date >= "2022-08-01" & date <= "2025-06-01"))
+```
+
+## European business and consumer survey
+
+``` r
+
+suffix <- "consumer_total_sa_nace2"
+tmpfile <- tempfile(tmpdir = tmpdir <- tempdir())
+
+# Try download for current month
+curr_date <- Sys.Date()
+curr_month <- lubridate::month(curr_date)
+curr_month <- ifelse(nchar(curr_month) == 1, paste0("0", curr_month), curr_month)
+curr_year <- substring(lubridate::year(curr_date), 3, 4)
+curr_month <- paste0(curr_year, curr_month)
+try(download.file(paste0("https://ec.europa.eu/economy_finance/db_indicators/surveys/documents/series/nace2_ecfin_", curr_month, "/", suffix, ".zip"),
+                  destfile = tmpfile),
+    silent = TRUE)
+sdmx_files <- unzip(tmpfile, exdir = tmpdir)
+
+# Download failed try it with download of one month earlier
+if (length(sdmx_files) == 0) {
+  curr_date <- lubridate::floor_date(Sys.Date(), "month") - 1
+  curr_month <- lubridate::month(curr_date)
+  curr_month <- ifelse(nchar(curr_month) == 1, paste0("0", curr_month), curr_month)
+  curr_year <- substring(lubridate::year(curr_date), 3, 4)
+  curr_month <- paste0(curr_year, curr_month)
+  try(download.file(paste0("https://ec.europa.eu/economy_finance/db_indicators/surveys/documents/series/nace2_ecfin_", curr_month, "/", suffix, ".zip"),
+                    destfile = tmpfile))
+}
+
+zipped_files <- unzip(tmpfile, exdir = tmpdir)
+
+monthly_data <- read_excel(zipped_files, "CONSUMER MONTHLY", na = "NA")
+names(monthly_data)[1] <- "date"
+
+quarterly_data <- read_excel(zipped_files, "CONSUMER QUARTERLY", na = "NA")
+names(quarterly_data)[1] <- "date"
+quarterly_data <- quarterly_data %>%
+  mutate(date = as.Date(as.yearqtr(date, "%Y-Q%q")),
+         date = ceiling_date(date, "quarter") - 1)
+
+survey <- bind_rows(monthly_data,
+                 quarterly_data) %>%
+  pivot_longer(cols = -c("date")) %>%
+  filter(!is.na(value)) %>%
+  mutate(date = floor_date(as.Date(date), "month"),
+         ctry = substring(name, 6, 7),
+         name = substring(name, 13, nchar(name)),
+         question = regmatches(name, regexpr("[^.]*", name))) %>%
+  filter(ctry == "AT") %>%
+  select(date, question, value) %>%
+  mutate(question = paste0("survey_", question)) %>%
+  pivot_wider(names_from = "question", values_from = "value")
+
+result <- left_join(result, survey, by = "date")
+```
+
+## Seasonality
+
+``` r
+result <- result %>%
+  mutate(season_jan = as.numeric(substring(date, 6, 7) == "01"),
+         season_feb = as.numeric(substring(date, 6, 7) == "02"),
+         season_mar = as.numeric(substring(date, 6, 7) == "03"),
+         season_apr = as.numeric(substring(date, 6, 7) == "04"),
+         season_may = as.numeric(substring(date, 6, 7) == "05"),
+         season_jun = as.numeric(substring(date, 6, 7) == "06"),
+         season_jul = as.numeric(substring(date, 6, 7) == "07"),
+         season_aug = as.numeric(substring(date, 6, 7) == "08"),
+         season_sep = as.numeric(substring(date, 6, 7) == "09"),
+         season_oct = as.numeric(substring(date, 6, 7) == "10"),
+         season_nov = as.numeric(substring(date, 6, 7) == "11"),
+         season_dec = as.numeric(substring(date, 6, 7) == "12"))
+```
+
+## Save data
+
+``` r
+write.csv(result, file = "loans-for-house-purchase-in-austria.csv", row.names = FALSE)
+```
