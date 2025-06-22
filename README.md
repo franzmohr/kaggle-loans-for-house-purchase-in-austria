@@ -40,12 +40,13 @@ result <- full_join(vol, intr, by = "date") %>%
   mutate(date = as.Date(paste0(date, "-01")))
 ```
 
-## KIM-V: Borrower-base measures
+## KIM-V: Borrower-based measures
 
 The Austria Financial Market Authority introduced legally binding
 borrower-based measures to address systemic risks from the national
 residential real estate sector. The measures were legally binding
-between August 2022 and June 2025.
+between August 2022 and June 2025. One part of the competition is also
+to quantify the effect of this measure on loan origination.
 
 ``` r
 result <- result %>%
